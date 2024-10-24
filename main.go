@@ -1,8 +1,10 @@
 package main
 
 import (
+   "context"
    "flag"
    "fmt"
+   "net"
    "net/netip"
    "os"
    "sync"
@@ -87,16 +89,28 @@ func scan(prefix netip.Prefix) error {
 func try(ip, user, pass string) {
    defer wg.Done()
 
+   addr := ip + ":22"
    sshConfig := ssh.ClientConfig{
       User:            user,
       Auth:            []ssh.AuthMethod{ssh.Password(pass)},
       HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-      Timeout:         3 * time.Second,
    }
 
-   conn, err := ssh.Dial("tcp", ip + ":22", &sshConfig)
-   if err == nil {
-      conn.Close()
-      hosts.Store(ip, "")
+   d := net.Dialer{}
+   ctx, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
+   defer cancel()
+
+   conn, err := d.DialContext(ctx, "tcp", addr)
+   if err != nil {
+      return
    }
+   defer conn.Close()
+
+   c, _, _, err := ssh.NewClientConn(conn, addr, &sshConfig)
+   if err != nil {
+      return
+   }
+
+   c.Close()
+   hosts.Store(ip, "")
 }
