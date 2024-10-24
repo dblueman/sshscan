@@ -94,8 +94,9 @@ func try(ip, user, pass string) {
       Timeout:         3 * time.Second,
    }
 
-   _, err := ssh.Dial("tcp", ip + ":22", &sshConfig)
+   conn, err := ssh.Dial("tcp", ip + ":22", &sshConfig)
    if err == nil {
+      conn.Close()
       hosts.Store(ip, "")
    }
 }
