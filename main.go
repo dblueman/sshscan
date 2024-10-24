@@ -7,6 +7,7 @@ import (
    "net"
    "net/netip"
    "os"
+   "strings"
    "sync"
    "time"
 
@@ -21,14 +22,14 @@ var (
 
 func main() {
    flag.Usage = func() {
-      fmt.Fprint(os.Stderr, "usage: [options] <subnet>\n" +
+      fmt.Fprint(os.Stderr, "usage: <subnet> [command] ...\n" +
          "   eg sshscan 10.1.2.0/24\n")
       flag.PrintDefaults()
    }
 
    flag.Parse()
 
-   if flag.NArg() != 1 {
+   if flag.NArg() < 1 {
       flag.Usage()
       os.Exit(2)
    }
@@ -39,20 +40,22 @@ func main() {
       os.Exit(2)
    }
 
-   err = scan(prefix)
+   cmd := strings.Join(flag.Args()[1:], " ")
+
+   err = scan(prefix, cmd)
    if err != nil {
       fmt.Println(os.Stderr, err.Error())
       os.Exit(1)
    }
 
    fmt.Println("\naccessible hosts:")
-   hosts.Range(func(host, _ any) bool {
-      fmt.Println(host.(string))
+   hosts.Range(func(host, out any) bool {
+      fmt.Printf("%s: %s", host.(string), out.(string))
       return true
    })
 }
 
-func scan(prefix netip.Prefix) error {
+func scan(prefix netip.Prefix, cmd string) error {
    addr := prefix.Addr()
 
    fmt.Print("username: ")
@@ -75,7 +78,7 @@ func scan(prefix netip.Prefix) error {
       }
 
       wg.Add(1)
-      go try(addr.String(), user, string(pass))
+      go try(addr.String(), user, string(pass), cmd)
       time.Sleep(30 * time.Millisecond)
 
       addr = addr.Next()
@@ -86,7 +89,7 @@ func scan(prefix netip.Prefix) error {
    return nil
 }
 
-func try(ip, user, pass string) {
+func try(ip, user, pass, cmd string) {
    defer wg.Done()
 
    addr := ip + ":22"
@@ -97,7 +100,7 @@ func try(ip, user, pass string) {
    }
 
    d := net.Dialer{}
-   ctx, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
+   ctx, cancel := context.WithTimeout(context.Background(), 45 * time.Second)
    defer cancel()
 
    conn, err := d.DialContext(ctx, "tcp", addr)
@@ -106,11 +109,19 @@ func try(ip, user, pass string) {
    }
    defer conn.Close()
 
-   c, _, _, err := ssh.NewClientConn(conn, addr, &sshConfig)
+   c, chans, reqs, err := ssh.NewClientConn(conn, addr, &sshConfig)
    if err != nil {
       return
    }
+   defer c.Close()
 
-   c.Close()
-   hosts.Store(ip, "")
+   client := ssh.NewClient(c, chans, reqs)
+   session, err := client.NewSession()
+   if err != nil {
+      return
+   }
+   defer session.Close()
+
+   out, _ := session.CombinedOutput(cmd)
+   hosts.Store(ip, string(out))
 }
